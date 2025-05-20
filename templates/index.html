@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chassis/VIN Number Detector & Obscurer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            padding-bottom: 20px;
+        }
+        .header {
+            margin-bottom: 30px;
+        }
+        .preview-container {
+            max-height: 600px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .preview-image {
+            max-width: 100%;
+            max-height: 600px;
+            object-fit: contain;
+        }
+        #loader {
+            display: none;
+            margin: 20px auto;
+            text-align: center;
+        }
+        .spinner-border {
+            width: 3rem; 
+            height: 3rem;
+        }
+        .results-container {
+            margin-top: 30px;
+        }
+        .upload-container {
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            padding: 25px;
+            text-align: center;
+            margin-bottom: 20px;
+            background-color: #f8f9fa;
+            cursor: pointer;
+        }
+        .upload-container.highlight {
+            border-color: #007bff;
+            background-color: #f1f8ff;
+        }
+        .upload-icon {
+            font-size: 3rem;
+            color: #6c757d;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1>Chassis/VIN Number Detector & Obscurer</h1>
+            <p class="lead">Upload an image containing vehicle identification numbers to detect and obscure them</p>
+        </div>
+
+        <div class="row">            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Upload & Settings</h5>
+                    </div>
+                    <div class="card-body">                        <div class="alert alert-warning" role="alert">
+                            <h5 class="alert-heading">Troubleshooting Detection Issues</h5>
+                            <p>If you notice that text like "CHASSIS NO" is incorrectly detected (where "NO" is being blurred instead of the actual number), 
+                               try enabling Debug Mode below to see exactly what the OCR model is detecting.</p>
+                            <p>This tool now uses manufacturer codes (like WDD, JT, VIN, etc.) to more accurately detect and obscure vehicle identifiers.</p>
+                            <p>For best results:</p>
+                            <ul>
+                                <li>Ensure the image has good lighting and contrast</li>
+                                <li>Crop the image to focus on the area with the identifier</li>
+                                <li>Use Debug Mode to verify detections before applying obscuring</li>
+                                <li>Select "After Manufacturer Code" option to keep the manufacturer code visible while obscuring the rest</li>
+                            </ul>
+                        </div>
+                        
+                        <form id="upload-form" enctype="multipart/form-data">
+                            <div class="upload-container" id="dropzone">
+                                <div class="upload-icon">
+                                    <i class="bi bi-cloud-arrow-up"></i>
+                                </div>
+                                <p>Drag & drop an image here or click to browse</p>
+                                <input type="file" id="file-input" name="file" accept="image/*" class="d-none">
+                                <button type="button" id="browse-button" class="btn btn-primary">Browse Files</button>
+                            </div>
+                            <div id="file-name" class="mb-3 text-center"></div>
+                              <div class="mb-3">
+                                <label for="obscure-part" class="form-label">Obscure Part</label>
+                                <select class="form-select" id="obscure-part" name="obscure_part">
+                                    <option value="First">First Third</option>
+                                    <option value="Middle">Middle Third</option>
+                                    <option value="Last" selected>Last Third</option>
+                                    <option value="Full">Full Number</option>
+                                    <option value="AfterPrefix">After Manufacturer Code</option>
+                                    <option value="OnlyPrefix">Only Manufacturer Code</option>
+                                </select>
+                                <div class="form-text">
+                                    "After Manufacturer Code" and "Only Manufacturer Code" options work only when 
+                                    manufacturer codes are detected (e.g., WDD for Mercedes-Benz, JT for Toyota).
+                                </div>
+                            </div>
+                                          <div class="mb-3">
+                                <label for="obscure-method" class="form-label">Obscuring Method</label>
+                                <select class="form-select" id="obscure-method" name="obscure_method">
+                                    <option value="Blur" selected>Blur</option>
+                                    <option value="Mosaic">Mosaic</option>
+                                </select>
+                            </div>
+                            
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="debug-mode" name="debug_mode">
+                                <label class="form-check-label" for="debug-mode">Debug Mode (Show detection boxes before obscuring)</label>
+                            </div>
+                            
+                            <div class="mb-3 blur-settings">
+                                <label for="blur-amount" class="form-label">Blur Amount: <span id="blur-value">51</span></label>
+                                <input type="range" class="form-range" id="blur-amount" name="blur_amount" min="1" max="101" step="2" value="51">
+                            </div>
+                            
+                            <div class="mb-3 mosaic-settings" style="display: none;">
+                                <label for="mosaic-size" class="form-label">Mosaic Block Size: <span id="mosaic-value">10</span></label>
+                                <input type="range" class="form-range" id="mosaic-size" name="mosaic_block_size" min="2" max="30" step="1" value="10">
+                            </div>
+                            
+                            <div class="text-center">
+                                <button type="submit" id="process-button" class="btn btn-success btn-lg" disabled>Process Image</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Preview</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="loader">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Processing image...</p>
+                        </div>
+                        
+                        <div class="preview-container" id="preview-container">
+                            <img src="" id="preview-image" class="preview-image d-none" alt="Preview">
+                        </div>
+                        
+                        <div class="results-container" id="results-container" style="display: none;">
+                            <h5>Detection Results:</h5>
+                            <ul id="results-list" class="list-group">
+                                <!-- Results will be populated here -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('upload-form');
+            const fileInput = document.getElementById('file-input');
+            const browseButton = document.getElementById('browse-button');
+            const fileName = document.getElementById('file-name');
+            const processButton = document.getElementById('process-button');
+            const previewImage = document.getElementById('preview-image');
+            const loader = document.getElementById('loader');
+            const resultsList = document.getElementById('results-list');
+            const resultsContainer = document.getElementById('results-container');
+            const dropzone = document.getElementById('dropzone');
+            const blurAmount = document.getElementById('blur-amount');
+            const blurValue = document.getElementById('blur-value');
+            const mosaicSize = document.getElementById('mosaic-size');
+            const mosaicValue = document.getElementById('mosaic-value');
+            const obscureMethod = document.getElementById('obscure-method');
+            const blurSettings = document.querySelector('.blur-settings');
+            const mosaicSettings = document.querySelector('.mosaic-settings');
+            
+            // Handle file browse button
+            browseButton.addEventListener('click', () => {
+                fileInput.click();
+            });
+            
+            // Handle slider changes
+            blurAmount.addEventListener('input', () => {
+                blurValue.textContent = blurAmount.value;
+            });
+            
+            mosaicSize.addEventListener('input', () => {
+                mosaicValue.textContent = mosaicSize.value;
+            });
+            
+            // Toggle between blur and mosaic settings
+            obscureMethod.addEventListener('change', () => {
+                if (obscureMethod.value === 'Blur') {
+                    blurSettings.style.display = 'block';
+                    mosaicSettings.style.display = 'none';
+                } else {
+                    blurSettings.style.display = 'none';
+                    mosaicSettings.style.display = 'block';
+                }
+            });
+            
+            // Handle file selection
+            fileInput.addEventListener('change', handleFileSelect);
+            
+            // Handle drag and drop
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('highlight');
+            });
+            
+            dropzone.addEventListener('dragleave', () => {
+                dropzone.classList.remove('highlight');
+            });
+            
+            dropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('highlight');
+                if (e.dataTransfer.files.length) {
+                    fileInput.files = e.dataTransfer.files;
+                    handleFileSelect();
+                }
+            });
+            
+            // Handle file selection
+            function handleFileSelect() {
+                if (fileInput.files.length === 0) return;
+                
+                const file = fileInput.files[0];
+                if (!file.type.match('image.*')) {
+                    alert('Please select an image file (JPG, JPEG, PNG)');
+                    return;
+                }
+                
+                fileName.textContent = file.name;
+                processButton.disabled = false;
+                
+                // Show preview of the selected image
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewImage.src = e.target.result;
+                    previewImage.classList.remove('d-none');
+                    resultsContainer.style.display = 'none';
+                };
+                reader.readAsDataURL(file);
+            }
+            
+            // Handle form submission
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                if (fileInput.files.length === 0) {
+                    alert('Please select an image file first');
+                    return;
+                }
+                
+                // Show loader and hide previous results
+                loader.style.display = 'block';
+                previewImage.classList.add('d-none');
+                resultsContainer.style.display = 'none';
+                
+                // Submit form data
+                const formData = new FormData(form);
+                
+                fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    loader.style.display = 'none';
+                    
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    
+                    // Display processed image
+                    previewImage.src = data.image_preview;
+                    previewImage.classList.remove('d-none');
+                    
+                    // Display results
+                    resultsList.innerHTML = '';
+                    data.results.forEach(result => {
+                        const li = document.createElement('li');
+                        li.className = 'list-group-item';
+                        li.textContent = result;
+                        resultsList.appendChild(li);
+                    });
+                    
+                    resultsContainer.style.display = 'block';
+                })
+                .catch(error => {
+                    loader.style.display = 'none';
+                    alert('Error processing image: ' + error);
+                });
+            });
+        });
+    </script>
+</body>
+</html>
