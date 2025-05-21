@@ -7,7 +7,14 @@ matplotlib.use('Agg')  # Use Agg backend to avoid requiring a GUI
 import matplotlib.pyplot as plt
 from flask import Flask, request, render_template, send_from_directory, jsonify
 from werkzeug.utils import secure_filename
-from paddleocr import PaddleOCR, draw_ocr
+from paddleocr import PaddleOCR
+# Import draw_ocr if available, otherwise define our own version
+try:
+    from paddleocr import draw_ocr
+    USING_BUILTIN_DRAW_OCR = True
+except ImportError:
+    USING_BUILTIN_DRAW_OCR = False
+    # We'll define a basic alternative to draw_ocr function later
 from PIL import Image
 import logging
 import base64
@@ -38,6 +45,44 @@ app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg'}
 # Create upload and output directories if they don't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+
+# Define our own draw_ocr function if paddleocr's version is not available
+if not USING_BUILTIN_DRAW_OCR:
+    def draw_ocr(image, boxes, txts, scores=None, font_path=None):
+        """
+        Alternative implementation of draw_ocr function when built-in is not available
+        Args:
+            image (numpy.ndarray): Image array
+            boxes (list): List of text box coordinates
+            txts (list): List of text strings
+            scores (list, optional): List of confidence scores
+            font_path (str, optional): Path to font for text rendering
+        Returns:
+            numpy.ndarray: Image with drawn OCR results
+        """
+        img = image.copy()
+        for idx, (box, txt) in enumerate(zip(boxes, txts)):
+            score = scores[idx] if scores else 1.0
+            
+            # Use a different color for each text block (cycle through colors)
+            color = (0, 0, 255) if idx % 3 == 0 else (0, 255, 0) if idx % 3 == 1 else (255, 0, 0)
+            
+            # Convert box points to numpy array
+            pts = np.array(box, dtype=np.int32)
+            
+            # Draw box around text
+            cv2.polylines(img, [pts], True, color, 2)
+            
+            # Add text for reference
+            x, y = pts[0]
+            text_to_show = f"{txt}"
+            if scores:
+                text_to_show += f" ({score:.2f})"
+                
+            cv2.putText(img, text_to_show, (x, y-5), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                        
+        return img
 
 # Initialize PaddleOCR engine
 ocr_engine = None
@@ -172,10 +217,20 @@ def process_image(img_path, obscure_part='Last', obscure_method='Blur',
     # Check if OCR engine is initialized
     global ocr_engine
     if ocr_engine is None:
-        init_ocr_engine()
+        success = init_ocr_engine()
+        if not success:
+            return None, "Failed to initialize OCR engine. Please check your PaddleOCR installation."
+    
+    # Ensure OCR engine is not None before proceeding
+    if ocr_engine is None:
+        return None, "OCR engine could not be initialized. Please check your PaddleOCR installation."
     
     # Perform OCR
-    result = ocr_engine.ocr(img_path, cls=True)
+    try:
+        result = ocr_engine.ocr(img_path, cls=True)
+    except Exception as e:
+        logger.exception("Error during OCR processing")
+        return None, f"OCR processing error: {str(e)}"
     
     # Handle potential nesting in the result
     if result and isinstance(result[0], list) and len(result) == 1:
@@ -209,16 +264,15 @@ def process_image(img_path, obscure_part='Last', obscure_method='Blur',
         boxes = [line[0] for line in ocr_results]
         texts = [line[1][0] for line in ocr_results]
         scores = [line[1][1] for line in ocr_results]
-        
-        # Default font path or try to find one available on the system
+          # Default font path or try to find one available on the system
         font_path = get_system_font_path()
         try:
-            # First try to use the PaddleOCR draw_ocr function for consistency
+            # Use the draw_ocr function (either built-in or our alternative)
             debug_image_with_boxes = draw_ocr(debug_image, boxes, texts, scores, font_path=font_path)
             debug_image = debug_image_with_boxes
         except Exception as e:
-            logger.error(f"Error using PaddleOCR draw_ocr: {e}. Using OpenCV fallback.")
-            # Fallback to basic OpenCV drawing if PaddleOCR draw_ocr fails
+            logger.error(f"Error using draw_ocr: {e}. Using OpenCV fallback.")
+            # Fallback to basic OpenCV drawing if draw_ocr fails
             for i, (text, box) in enumerate(zip(texts, boxes)):
                 pts = np.array(box, dtype=np.int32)
                 # Use a different color for each text block (cycle through colors)
@@ -645,5 +699,10 @@ def process_batch():
 
 if __name__ == '__main__':
     # Initialize OCR engine at startup with multi-language support
-    init_ocr_engine(use_gpu=False)
+    success = init_ocr_engine(use_gpu=False)
+    if not success:
+        print("WARNING: Failed to initialize OCR engine at startup.")
+        print("The application will try to initialize OCR engine when processing the first image.")
+    else:
+        print("OCR engine initialized successfully.")
     app.run(debug=True)
